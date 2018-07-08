@@ -1,0 +1,244 @@
+
+// ReggieDlg.cpp : implementation file
+//
+
+#include "stdafx.h"
+#include "Reggie.h"
+#include "ReggieDlg.h"
+#include "afxdialogex.h"
+
+#ifdef _DEBUG
+#define new DEBUG_NEW
+#endif
+
+//Globals
+LONGLONG g_IOPS;
+LONG64 g_Throughput;
+BOOL g_isActive;
+
+DWORD g_TopIops;
+DWORD g_TopThroughput;
+DOUBLE g_TopLatency;
+
+
+// CReggieDlg dialog
+
+CReggieDlg::CReggieDlg(CWnd* pParent /*=NULL*/)
+	: CDialogEx(CReggieDlg::IDD, pParent)
+{
+	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+}
+
+void CReggieDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialogEx::DoDataExchange(pDX);
+	DDX_Control(pDX, IDC_IOTYPE, m_iotype);
+	DDX_Control(pDX, IDC_IOSIZEGAUGE, m_iosizegauge);
+	DDX_Control(pDX, IDC_IOSIZE, m_iosize);
+	DDX_Control(pDX, IDC_ThreadCount, m_ThreadCount);
+	DDX_Control(pDX, IDC_IOPSProgress, m_IopsProgress);
+	DDX_Control(pDX, IDC_ThroughputProgress, m_ThroughputProgress);
+	DDX_Control(pDX, IDC_LatencyProgress, m_LatencyProgress);
+	DDX_Control(pDX, IDC_IOPSEdit, m_IopsEdit);
+	DDX_Control(pDX, IDC_ThroughputEdit, m_ThroughputEdit);
+	DDX_Control(pDX, IDC_LatencyEdit, m_LatencyEdit);
+	DDX_Control(pDX, IDC_TOPIOPS, m_TopIops);
+	DDX_Control(pDX, IDC_TOPThroughput, m_TopThroughput);
+	DDX_Control(pDX, IDC_TOPLatency, m_TopLatency);
+}
+
+BEGIN_MESSAGE_MAP(CReggieDlg, CDialogEx)
+	ON_WM_SYSCOMMAND()
+	ON_WM_PAINT()
+	ON_WM_QUERYDRAGICON()
+	ON_BN_CLICKED(IDC_Start, &CReggieDlg::OnBnClickedStart)
+	ON_BN_CLICKED(IDC_STOP, &CReggieDlg::OnBnClickedStop)
+	ON_WM_HSCROLL()
+	ON_WM_TIMER()
+END_MESSAGE_MAP()
+
+
+// CReggieDlg message handlers
+
+BOOL CReggieDlg::OnInitDialog()
+{
+	CDialogEx::OnInitDialog();
+
+	// Set the icon for this dialog.  This is automatically done for you by the framework.
+	SetIcon(m_hIcon, TRUE);			// Set big icon
+	SetIcon(m_hIcon, FALSE);		// Set small icon
+
+	//extra initialization 
+
+	//Controls
+	m_iotype.AddString(L"READ");
+	m_iotype.AddString(L"WRTIE");
+	m_iotype.AddString(L"READ/WRITE");
+	m_iotype.SetCurSel(0);
+
+	m_iosize.SetRange(1, 1000);
+	m_iosize.SetPos(100);
+	m_iosizegauge.SetWindowTextW(L"100");
+
+	m_ThreadCount.AddString(L"1");
+	m_ThreadCount.AddString(L"2");
+	m_ThreadCount.AddString(L"4");
+	m_ThreadCount.AddString(L"8");
+	m_ThreadCount.AddString(L"16");
+	m_ThreadCount.AddString(L"32");
+	m_ThreadCount.AddString(L"64");
+	m_ThreadCount.AddString(L"128");
+	m_ThreadCount.SetCurSel(0);
+
+	//Reporting Timer
+	SetTimer(1, 1000, 0);
+
+	return TRUE;  // return TRUE  unless you set the focus to a control
+}
+
+
+//  draw the app icon. This is automatically done for you by the framework.
+void CReggieDlg::OnPaint()
+{
+	if (IsIconic())
+	{
+		CPaintDC dc(this); // device context for painting
+
+		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
+
+		// Center icon in client rectangle
+		int cxIcon = GetSystemMetrics(SM_CXICON);
+		int cyIcon = GetSystemMetrics(SM_CYICON);
+		CRect rect;
+		GetClientRect(&rect);
+		int x = (rect.Width() - cxIcon + 1) / 2;
+		int y = (rect.Height() - cyIcon + 1) / 2;
+
+		// Draw the icon
+		dc.DrawIcon(x, y, m_hIcon);
+	}
+	else
+	{
+		CDialogEx::OnPaint();
+	}
+}
+
+// The system calls this function to obtain the cursor to display while the user drags the minimized window.
+HCURSOR CReggieDlg::OnQueryDragIcon()
+{
+	return static_cast<HCURSOR>(m_hIcon);
+}
+
+
+
+void CReggieDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
+{
+	CDialogEx::OnHScroll(nSBCode, nPos, pScrollBar);
+
+	int nIndex = m_iosize.GetPos();
+	CString StrText;
+	StrText.Format(L"%d", nIndex);
+
+	UpdateData();
+	m_iosizegauge.SetWindowTextW(StrText);
+	
+}
+
+
+UINT CReggieDlg::WorkerThreadProc(LPVOID Param) 
+{
+	HKEY hKey;
+	WCHAR szBuffer[512];
+	DWORD dwBufferSize = sizeof(szBuffer);
+
+	DWORD dwRet = 0;
+
+	while (g_isActive) 
+	{
+		dwRet = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &hKey);
+
+		dwRet = RegQueryValueExW(hKey, _T("ProductName"), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
+
+		InterlockedIncrement64(&g_IOPS);
+		InterlockedAdd64(&g_Throughput, dwBufferSize);
+	}
+	return 0;
+}
+
+
+void CReggieDlg::OnBnClickedStart()
+{
+	//UpdateData();
+
+	CString StrText;
+
+	int nIndex = m_ThreadCount.GetCurSel();
+	m_ThreadCount.GetLBText(nIndex, StrText);
+	int nThreadCount = _ttoi(StrText);
+
+	g_isActive = TRUE;
+
+	for (int i = 0; i < nThreadCount; i++){
+
+		AfxBeginThread(WorkerThreadProc, 0);
+
+	}
+
+}
+
+
+void CReggieDlg::OnTimer(UINT_PTR nIDEvent)
+{
+	CDialogEx::OnTimer(nIDEvent);
+
+	CString StrText;
+
+	//Update Current Values
+	StrText.Format(L"%d", g_IOPS);
+	m_IopsEdit.SetWindowTextW(StrText);
+
+	StrText.Format(L"%d", g_Throughput / 1024);
+	m_ThroughputEdit.SetWindowTextW(StrText);
+
+	StrText.Format(L"%.9f", 1 / (FLOAT)g_IOPS);
+	m_LatencyEdit.SetWindowTextW(StrText);
+
+	//Update Top Values
+	if (g_IOPS > g_TopIops) {
+		g_TopIops = g_IOPS;
+		m_IopsProgress.SetRange(0, g_TopIops/10);
+
+	}
+	StrText.Format(L"Top: %d", g_TopIops);
+	m_TopIops.SetWindowTextW(StrText);
+
+	if (g_Throughput > g_TopThroughput) {
+		g_TopThroughput = g_Throughput;
+		m_ThroughputProgress.SetRange(0, g_TopThroughput/1024);
+	}
+	StrText.Format(L"Top: %d", g_TopThroughput / 1024);
+	m_TopThroughput.SetWindowTextW(StrText);
+
+	DOUBLE CurrLatency = 1 / (DOUBLE)g_IOPS;
+	if (CurrLatency > g_TopLatency && CurrLatency == 0)
+		g_TopLatency = CurrLatency;
+	StrText.Format(L"Top: %.9f", CurrLatency);
+	m_TopLatency.SetWindowTextW(StrText);
+
+	//Update graphs
+	m_IopsProgress.SetPos(g_IOPS/10);
+	m_ThroughputProgress.SetPos(g_Throughput/1024);
+
+
+
+	InterlockedAnd64(&g_IOPS, 0);
+	InterlockedAnd64(&g_Throughput, 0);
+}
+
+
+void CReggieDlg::OnBnClickedStop()
+{
+	g_isActive = FALSE;
+}
+
+
