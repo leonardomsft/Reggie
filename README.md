@@ -7,4 +7,4 @@ Select the test parameters (I/O Type, I/O Size, and Worker Threads) and click St
 ![Alt text](screenshots/local.png?raw=true "Img1")
 
 Latest release:
-https://github.com/leonardomsft/Reggie/releases/download/v1.0/WaitingOn.exe
+https://github.com/leonardomsft/Reggie/releases/download/v1.0/Reggie.exe
