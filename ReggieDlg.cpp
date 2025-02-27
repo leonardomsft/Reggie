@@ -23,8 +23,12 @@ DOUBLE g_TopLatency;
 
 // CReggieDlg dialog
 
-CReggieDlg::CReggieDlg(CWnd* pParent /*=NULL*/)
-	: CDialogEx(CReggieDlg::IDD, pParent)
+CReggieDlg::CReggieDlg(CWnd* pParent) : CDialogEx(CReggieDlg::IDD, pParent)
+			
+	, m_TestType(0)
+	, m_intThreads(0)
+	, m_intRootKey(0)
+	, m_Desination("SOFTWARE")
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
@@ -36,6 +40,7 @@ void CReggieDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_IOSIZEGAUGE, m_iosizegauge);
 	DDX_Control(pDX, IDC_IOSIZE, m_iosize);
 	DDX_Control(pDX, IDC_ThreadCount, m_ThreadCount);
+	DDX_Control(pDX, IDC_RootKey, m_RootKey);
 	DDX_Control(pDX, IDC_IOPSProgress, m_IopsProgress);
 	DDX_Control(pDX, IDC_ThroughputProgress, m_ThroughputProgress);
 	DDX_Control(pDX, IDC_LatencyProgress, m_LatencyProgress);
@@ -45,6 +50,11 @@ void CReggieDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_TOPIOPS, m_TopIops);
 	DDX_Control(pDX, IDC_TOPThroughput, m_TopThroughput);
 	DDX_Control(pDX, IDC_TOPLatency, m_TopLatency);
+
+	DDX_Radio(pDX, IDC_TransferTest, m_TestType);
+	DDX_CBIndex(pDX, IDC_ThreadCount, m_intThreads);
+	DDX_CBIndex(pDX, IDC_RootKey, m_intRootKey);
+	DDX_Text(pDX, IDC_Destination, m_Desination);
 }
 
 BEGIN_MESSAGE_MAP(CReggieDlg, CDialogEx)
@@ -64,13 +74,11 @@ BOOL CReggieDlg::OnInitDialog()
 {
 	CDialogEx::OnInitDialog();
 
-	// Set the icon for this dialog.  This is automatically done for you by the framework.
+	// Set the icon for this dialog
 	SetIcon(m_hIcon, TRUE);			// Set big icon
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
-	//extra initialization 
-
-	//Controls
+	//Initialize Controls
 	m_iotype.AddString(L"READ");
 	m_iotype.AddString(L"WRTIE");
 	m_iotype.AddString(L"READ/WRITE");
@@ -90,6 +98,10 @@ BOOL CReggieDlg::OnInitDialog()
 	m_ThreadCount.AddString(L"128");
 	m_ThreadCount.SetCurSel(0);
 
+	m_RootKey.AddString(L"HKCU");
+	m_RootKey.AddString(L"HKLM");
+	m_RootKey.SetCurSel(0);
+
 	//Reporting Timer
 	SetTimer(1, 1000, 0);
 
@@ -97,7 +109,7 @@ BOOL CReggieDlg::OnInitDialog()
 }
 
 
-//  draw the app icon. This is automatically done for you by the framework.
+//  draw the app icon. 
 void CReggieDlg::OnPaint()
 {
 	if (IsIconic())
@@ -144,9 +156,19 @@ void CReggieDlg::OnHScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
 	
 }
 
-
-UINT CReggieDlg::WorkerThreadProc(LPVOID Param) 
+UINT CReggieDlg::EnumWorkerThreadProc(LPVOID Param)
 {
+	WorkerParams* pWP = (WorkerParams*)Param;
+
+	SearchReg(pWP->rootKey, pWP->Desination);
+
+	return 0;
+}
+
+UINT CReggieDlg::TransferWorkerThreadProc(LPVOID Param) 
+{
+	WorkerParams* pWP = (WorkerParams*)Param;
+
 	HKEY hKey;
 	WCHAR szBuffer[512];
 	DWORD dwBufferSize = sizeof(szBuffer);
@@ -155,9 +177,12 @@ UINT CReggieDlg::WorkerThreadProc(LPVOID Param)
 
 	while (g_isActive) 
 	{
-		dwRet = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &hKey);
+		
+		dwRet = RegOpenKeyExW(HKEY_LOCAL_MACHINE, pWP->Desination, 0, KEY_READ, &hKey);
 
-		dwRet = RegQueryValueExW(hKey, _T("ProductName"), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
+		if (dwRet != ERROR_SUCCESS) return 0;
+
+		dwRet = RegQueryValueExW(hKey, L"ProductName", 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
 
 		InterlockedIncrement64(&g_IOPS);
 		InterlockedAdd64(&g_Throughput, dwBufferSize);
@@ -165,24 +190,114 @@ UINT CReggieDlg::WorkerThreadProc(LPVOID Param)
 	return 0;
 }
 
+void CReggieDlg::SearchReg(HKEY hroot, CString rootKeyPath)
+{
+	HKEY rootKey;
+	HKEY newsubKey;
+	DWORD rootKeyCount, newsubKeyCount;
+	WCHAR subKeyName[500];
+	DWORD buffSize;
+	WCHAR result[500];
+
+	//Validade params
+	WCHAR backslash[] = {L"\\"};
+	if (rootKeyPath.Right(1) != backslash) rootKeyPath.Append(backslash);
+
+	//open root
+	DWORD dwRet = RegOpenKeyExW(hroot, rootKeyPath, NULL, KEY_READ, &rootKey); 
+
+	if (dwRet != ERROR_SUCCESS) return;
+
+	//how many subkeys in root
+	dwRet = RegQueryInfoKey(rootKey, NULL, NULL, NULL, &rootKeyCount, NULL, NULL, NULL, NULL, NULL, NULL, NULL); 
+
+	if (dwRet != ERROR_SUCCESS || !rootKeyCount || !g_isActive) return;
+
+	for (int i = 0; i < rootKeyCount; i++)
+	{
+		buffSize = sizeof(subKeyName)/2;
+
+		//enumerate subkeys in root
+		dwRet = RegEnumKeyEx(rootKey, i, subKeyName, &buffSize, NULL, NULL, NULL, NULL); 
+
+		//Add stats
+		InterlockedIncrement64(&g_IOPS);
+		InterlockedAdd64(&g_Throughput, buffSize);
+
+		if (dwRet != ERROR_SUCCESS) return;
+
+		CString newkeyName = rootKeyPath + subKeyName;
+
+		//open subkey
+		dwRet = RegOpenKeyEx(hroot, newkeyName, NULL, KEY_READ, &newsubKey); 
+
+		if (dwRet != ERROR_SUCCESS) continue;
+
+		//how many newsubkeys in subkey
+		dwRet = RegQueryInfoKey(newsubKey, NULL, NULL, NULL, &newsubKeyCount, NULL, NULL, NULL, NULL, NULL, NULL, NULL); 
+
+		//if subkey has children, it's a new root. recurse.
+		if (newsubKeyCount)
+		{
+			SearchReg(hroot, newkeyName);
+		}
+
+	}
+
+}
+
 
 void CReggieDlg::OnBnClickedStart()
 {
-	//UpdateData();
+	UpdateData(true);
 
-	CString StrText;
+	WorkerParams* pWP = new WorkerParams();
+	pWP->TestType = 0;
+	pWP->Desination = m_Desination;
+	pWP->rootKey = HKEY_CURRENT_USER;
 
-	int nIndex = m_ThreadCount.GetCurSel();
-	m_ThreadCount.GetLBText(nIndex, StrText);
-	int nThreadCount = _ttoi(StrText);
+	CString ThreadCount;
+	
+	m_ThreadCount.GetLBText(m_intThreads, ThreadCount);
+	
+	switch (m_intRootKey)
+	{
+	case 0:
+	{
+		pWP->rootKey = HKEY_CURRENT_USER;
+		break;
+	}
+	case 1:
+	{
+		pWP->rootKey = HKEY_LOCAL_MACHINE;
+		break;
+
+	}
+	}
+
+	int nThreadCount = _ttoi(ThreadCount);
 
 	g_isActive = TRUE;
 
-	for (int i = 0; i < nThreadCount; i++){
 
-		AfxBeginThread(WorkerThreadProc, 0);
+	switch (m_TestType == 1)
+	{
+	case 0:
 
+		for (int i = 0; i < nThreadCount; i++)
+		{
+			AfxBeginThread(TransferWorkerThreadProc, pWP);
+		}
+
+		break;
+
+	case 1:
+				
+		AfxBeginThread(EnumWorkerThreadProc, pWP);
+
+		break;
 	}
+
 
 }
 
@@ -192,6 +307,7 @@ void CReggieDlg::OnTimer(UINT_PTR nIDEvent)
 	CDialogEx::OnTimer(nIDEvent);
 
 	CString StrText;
+	float LatencyMs;
 
 	//Update Current Values
 	StrText.Format(L"%d", g_IOPS);
@@ -200,7 +316,13 @@ void CReggieDlg::OnTimer(UINT_PTR nIDEvent)
 	StrText.Format(L"%d", g_Throughput / 1024);
 	m_ThroughputEdit.SetWindowTextW(StrText);
 
-	StrText.Format(L"%.9f", 1 / (FLOAT)g_IOPS);
+	if (g_IOPS > 0)
+		LatencyMs = (1 / (float)g_IOPS) * 1000;
+	else
+		LatencyMs = 0.0;
+
+	StrText.Format(L"%.6f", LatencyMs);
+
 	m_LatencyEdit.SetWindowTextW(StrText);
 
 	//Update Top Values
@@ -219,16 +341,14 @@ void CReggieDlg::OnTimer(UINT_PTR nIDEvent)
 	StrText.Format(L"Top: %d", g_TopThroughput / 1024);
 	m_TopThroughput.SetWindowTextW(StrText);
 
-	DOUBLE CurrLatency = 1 / (DOUBLE)g_IOPS;
-	if (CurrLatency > g_TopLatency && CurrLatency == 0)
-		g_TopLatency = CurrLatency;
-	StrText.Format(L"Top: %.9f", CurrLatency);
+	if ((LatencyMs < g_TopLatency && LatencyMs > 0) || g_TopLatency == 0)
+		g_TopLatency = LatencyMs;
+	StrText.Format(L"Top: %.6f", (double)g_TopLatency);
 	m_TopLatency.SetWindowTextW(StrText);
 
 	//Update graphs
 	m_IopsProgress.SetPos(g_IOPS/10);
 	m_ThroughputProgress.SetPos(g_Throughput/1024);
-
 
 
 	InterlockedAnd64(&g_IOPS, 0);

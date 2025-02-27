@@ -38,9 +38,12 @@ public:
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg void OnBnClickedStop();
 
-	static UINT CReggieDlg::WorkerThreadProc(LPVOID Param);
+	static UINT CReggieDlg::TransferWorkerThreadProc(LPVOID Param);
+	static UINT CReggieDlg::EnumWorkerThreadProc(LPVOID Param);
+	static void CReggieDlg::SearchReg(HKEY rootKey, CString subKeyPath);
 
 	CComboBox m_iotype;
+	CComboBox m_RootKey;
 	CSliderCtrl m_iosize;
 	CComboBox m_ThreadCount;
 	CProgressCtrl m_IopsProgress;
@@ -53,4 +56,19 @@ public:
 	CStatic m_TopIops;
 	CStatic m_TopThroughput;
 	CStatic m_TopLatency;
+	
+	CString m_Desination;
+	int m_TestType;
+	int m_intThreads;
+	int m_intRootKey;
+
+
+};
+
+class WorkerParams
+{
+public:
+	CString Desination;
+	int TestType;
+	HKEY rootKey;
 };
